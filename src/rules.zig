@@ -14,8 +14,14 @@ const windows_endline_normalize = enum {
 
 /// Function to replace all \r\n to just \n
 pub fn normalize(data: *std.ArrayList(u8)) !void {
+
+    // Start in the start state
     var state = windows_endline_normalize.S;
+
+    // Initialize the search index
     var index: usize =  0;
+
+    // Iterate through the data and replace '\r\n with \n'
     while (index < data.items.len) {
         switch (state) {
             .S => {
@@ -36,7 +42,6 @@ pub fn normalize(data: *std.ArrayList(u8)) !void {
         index += 1;
     }
 }
-
 
 test "normalize line breaks" {
     const allocator = std.testing.allocator;
