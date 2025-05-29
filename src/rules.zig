@@ -51,5 +51,4 @@ test "normalize line breaks" {
     try data.appendSlice(test_string1);
     try normalize(&data);
     try std.testing.expectEqualStrings(data.items, "This is my test string\nIt's\ngoing\rwell\n");
-
 }
