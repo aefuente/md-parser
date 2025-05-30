@@ -62,6 +62,31 @@ pub const parser = struct {
 
     }
 
+    // Every line will produce a paragraph. Multiple Paragraphs
+    // without a empty line will be translated as a single paragraph
+    fn paragraphHandler(p: *parser, data: []const u8) !usize {
+        var cur_pos: usize = 0;
+        while (cur_pos < data.len) {
+            if (data[cur_pos] == '\n') {
+                try p.tokens.append(
+                    tokens.token{
+                    .sequence = tokens.sequence_type.INLINE,
+                    .token_type = tokens.token_type.PARAGRAPH,
+                    .value = data[0..cur_pos]
+                });
+                return cur_pos + 1;
+            }
+            cur_pos += 1;
+        }
+        try p.tokens.append(
+            tokens.token{
+            .sequence = tokens.sequence_type.INLINE,
+            .token_type = tokens.token_type.PARAGRAPH,
+            .value = data[0..cur_pos]
+        });
+        return cur_pos;
+    }
+
 
     pub fn parse(p: *parser) ![]tokens.token {
         var cur_pos: usize = 0;
@@ -104,5 +129,19 @@ test "headerHandler" {
     try std.testing.expectEqual(4, try p.headerHandler("####Four Header"));
     
     std.debug.print("{any}\n", .{p.tokens.items});
+}
 
+test "paragraphHandler" {
+    const allocator = std.testing.allocator;
+    var p = try parser.init(allocator, "dummysource");
+    defer p.deinit();
+    try std.testing.expectEqual(11, try p.paragraphHandler("single line"));
+    try std.testing.expectEqual(
+        12, 
+        try p.paragraphHandler("double line\n next line")
+    );
+    try std.testing.expectEqual(10, try p.paragraphHandler("double line\n next line"[12..]));
+    for (p.tokens.items) | token| {
+        std.debug.print("line: {s}\n", .{token.value.?});
+    }
 }

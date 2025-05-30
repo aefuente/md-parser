@@ -20,7 +20,7 @@ pub const token_type = enum {
 pub const token = struct {
     sequence: sequence_type,
     token_type: token_type,
-    value: ?[]u8,
+    value: ?[]const u8,
 };
 
 
