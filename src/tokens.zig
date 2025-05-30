@@ -14,7 +14,13 @@ pub const token_type = enum {
     HEADER4,
     HEADER5,
     HEADER6,
+    TEXT,
     PARAGRAPH,
+    EMPTY,
+    THEMEBREAK,
+    BLOCKQUOTES,
+    FENCEDCODE,
+
 };
 
 pub const token = struct {

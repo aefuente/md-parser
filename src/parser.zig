@@ -8,7 +8,7 @@ fn indexOfLineBreak(start: usize, data: []const u8) ?usize {
     var index = start;
     while (index < data.len) {
         if (data[index] == '\n') {
-            return index;
+            return index+1;
         }
         index += 1;
     }
@@ -18,6 +18,7 @@ fn indexOfLineBreak(start: usize, data: []const u8) ?usize {
 pub const parser = struct {
     allocator: Allocator,
     source: []u8,
+    pos: usize,
     tokens: std.ArrayList(tokens.token),
 
     pub fn init(allocator: Allocator, source: []const u8) !parser{
@@ -28,6 +29,7 @@ pub const parser = struct {
         return .{
             .allocator = allocator,
             .source = try tmp_source.toOwnedSlice(),
+            .pos = 0,
             .tokens = std.ArrayList(tokens.token).init(allocator)
         };
 
@@ -39,9 +41,9 @@ pub const parser = struct {
 
     }
 
-    fn headerHandler(p: *parser, data: []const u8) !?usize {
-        if (data.len < 0 or data[0] != '#') {
-            return null;
+    fn headerHandler(p: *parser, data: []const u8) !bool {
+        if (data.len == 0 or data[0] != '#') {
+            return false; 
         }
         var count: i32 = 0;
         var cur_pos: usize = 0;
@@ -50,7 +52,7 @@ pub const parser = struct {
             cur_pos +=1;
         }
         if (count > 6) {
-            return null;
+            return false;
         }
         try p.tokens.append(
             tokens.token{
@@ -58,44 +60,119 @@ pub const parser = struct {
                 .token_type = @enumFromInt(count-1),
                 .value = null
         });
-        return cur_pos;
+        p.pos = p.pos + cur_pos;
+        return true;
 
     }
 
-    // Every line will produce a paragraph. Multiple Paragraphs
-    // without a empty line will be translated as a single paragraph
-    fn paragraphHandler(p: *parser, data: []const u8) !usize {
+    fn textHandler(p: *parser, data: []const u8) !bool {
         var cur_pos: usize = 0;
         while (cur_pos < data.len) {
             if (data[cur_pos] == '\n') {
                 try p.tokens.append(
                     tokens.token{
-                    .sequence = tokens.sequence_type.INLINE,
-                    .token_type = tokens.token_type.PARAGRAPH,
+                    .sequence = tokens.sequence_type.LEAF,
+                    .token_type = tokens.token_type.TEXT,
                     .value = data[0..cur_pos]
                 });
-                return cur_pos + 1;
+                p.pos = p.pos + cur_pos + 1;
+                return true;
             }
             cur_pos += 1;
         }
         try p.tokens.append(
             tokens.token{
             .sequence = tokens.sequence_type.INLINE,
-            .token_type = tokens.token_type.PARAGRAPH,
+            .token_type = tokens.token_type.TEXT,
             .value = data[0..cur_pos]
         });
-        return cur_pos;
+        p.pos = p.pos + cur_pos + 1;
+        return true;
     }
 
+    fn blankHandler(p: *parser, data: []const u8) !bool {
+
+        if (data.len == 0 or data[0] != '\n') {
+            return false;
+        }
+        try p.tokens.append(
+            tokens.token{
+                .sequence = tokens.sequence_type.LEAF,
+                .token_type = tokens.token_type.EMPTY,
+                .value = null, 
+            }
+        );
+        p.pos += 1;
+        return true;
+    }
+
+    fn blockQuotesHandler(p: *parser, data: []const u8) !bool {
+        if (data.len < 2 or data[0] != '>' or data[1] == '>') {
+            return false; 
+        }
+        try p.tokens.append(
+            tokens.token{
+                .sequence = tokens.sequence_type.CONTAINER,
+                .token_type = tokens.token_type.BLOCKQUOTES,
+                .value = null, 
+            }
+        );
+        p.pos += 1;
+        return true;
+    }
+
+    fn fencedCodeHandler(p: *parser, data: []const u8) !bool {
+        var flag = false;
+        if (data.len < 3) {
+            return false;
+        }
+        if (data[0] == '`' and data[1] == '`' and data[2] == '`') {
+            flag = true;
+        }
+        if (data[0] == '~' and data[1] == '~' and data[2] == '~') {
+            flag = true;
+        }
+
+        if (!flag){ return false;}
+
+        try p.tokens.append(
+            tokens.token{
+                .sequence = tokens.sequence_type.LEAF,
+                .token_type = tokens.token_type.FENCEDCODE,
+                .value = null, 
+            }
+        );
+        var cur_pos: usize = 0;
+        while (cur_pos < data.len and data[cur_pos] != '\n') {
+            cur_pos += 1;
+        }
+        p.pos += cur_pos + 1;
+
+        return true;
+
+    }
 
     pub fn parse(p: *parser) ![]tokens.token {
-        var cur_pos: usize = 0;
-        while (indexOfLineBreak(cur_pos, p.source)) | line_break | {
-            std.debug.print("line: {s}\n", .{p.source[cur_pos..line_break]});
-            cur_pos = line_break + 1;
+        while (indexOfLineBreak(p.pos, p.source)) | line_break | {
+            if (try p.blankHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            if (try p.headerHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            if (try p.blockQuotesHandler(p.source[p.pos..line_break])) {
+                continue;
+            } 
+            if (try p.fencedCodeHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            if (try p.textHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            std.log.warn("Failed reading line: {s}", .{p.source[p.pos..line_break]});
+            p.pos = line_break;
         }
         return &[_]tokens.token{};
-
     }
 };
 
@@ -113,35 +190,56 @@ test "parser init" {
 
 test "parser parse" {
     const allocator = std.testing.allocator;
-    const test_string = "Test read\nline by line\n if thats okay\n";
+    const test_string = "#Title\n> block it\nTest\n>again\n>twice read\n\n\nline by line\n if thats okay\n";
 
     var p = try parser.init(allocator, test_string);
     defer p.deinit();
     _ = try p.parse();
+    for (p.tokens.items) | token| {
+        if (token.value) |value| {
+            std.debug.print("type: {any}, value: {s}\n", .{token.token_type, value});
+        } else {
+            std.debug.print("type: {any}\n", .{token.token_type});
+        }
+    }
 }
 
 test "headerHandler" {
     const allocator = std.testing.allocator;
     var p = try parser.init(allocator, "#Single Header");
     defer p.deinit();
-    try std.testing.expectEqual(1, try p.headerHandler("#single Header"));
-    try std.testing.expectEqual(2, try p.headerHandler("##DOUBLE Header"));
-    try std.testing.expectEqual(4, try p.headerHandler("####Four Header"));
+    try std.testing.expectEqual(true, try p.headerHandler("#single Header"));
+    try std.testing.expectEqual(true, try p.headerHandler("##DOUBLE Header"));
+    try std.testing.expectEqual(true, try p.headerHandler("####Four Header"));
+    try std.testing.expectEqual(false, try p.headerHandler("Some #Header"));
     
     std.debug.print("{any}\n", .{p.tokens.items});
 }
 
-test "paragraphHandler" {
+test "textHandler" {
     const allocator = std.testing.allocator;
     var p = try parser.init(allocator, "dummysource");
     defer p.deinit();
-    try std.testing.expectEqual(11, try p.paragraphHandler("single line"));
+    try std.testing.expectEqual(true, try p.textHandler("single line"));
     try std.testing.expectEqual(
-        12, 
-        try p.paragraphHandler("double line\n next line")
+        true, 
+        try p.textHandler("double line\n next line")
     );
-    try std.testing.expectEqual(10, try p.paragraphHandler("double line\n next line"[12..]));
+    try std.testing.expectEqual(true, try p.textHandler("double line\n next line"[12..]));
     for (p.tokens.items) | token| {
         std.debug.print("line: {s}\n", .{token.value.?});
     }
+}
+
+test "blockQuotesHandler" {
+    const allocator = std.testing.allocator;
+    var p = try parser.init(allocator, "dummysource");
+    defer p.deinit();
+    try std.testing.expectEqual(true, try p.blockQuotesHandler("> hello\n"));
+    try std.testing.expectEqual(true, try p.blockQuotesHandler(">1hello\n"));
+    try std.testing.expectEqual(true, try p.blockQuotesHandler(">'hello\n"));
+    try std.testing.expectEqual(true, try p.blockQuotesHandler(">'hello"));
+    try std.testing.expectEqual(false, try p.blockQuotesHandler("'hello"));
+    try std.testing.expectEqual(false, try p.blockQuotesHandler(">>hello"));
+    try std.testing.expectEqual(false, try p.blockQuotesHandler("# >hello"));
 }
