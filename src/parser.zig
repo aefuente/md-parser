@@ -4,6 +4,11 @@ const tokens = @import("tokens.zig");
 const rules = @import("rules.zig");
 const mvzr = @import("mvzr.zig");
 
+
+/// Returns the inclusive usize of a line
+/// Example hello\n returns 6
+///         012345  
+/// So this can be used as data[start:usize] with \n included in the string
 fn indexOfLineBreak(start: usize, data: []const u8) ?usize {
     var index = start;
     while (index < data.len) {
@@ -41,60 +46,92 @@ pub const parser = struct {
 
     }
 
+    /// Returns true or false if an ATX heading was found.
+    /// Adjust the position of the parser to just after the heading
     fn headerHandler(p: *parser, data: []const u8) !bool {
-        if (data.len == 0 or data[0] != '#') {
-            return false; 
+
+        // Detects the amount of leading whitespace 
+        const pre_space_count = leadingWhiteSpace(data);
+
+        // SPEC requires whitespace less than four
+        if (pre_space_count > 3) {
+            return false;
         }
+        var cur_pos = pre_space_count;
+        
+        // Next character is required to be '#' and also doing bounds checking
+        if (cur_pos == data.len or data[cur_pos] != '#') {
+            return false;
+        }
+
+        // Count the number of consecutive '#'
         var count: i32 = 0;
-        var cur_pos: usize = 0;
         while(cur_pos < data.len and data[cur_pos] == '#') {
             count+=1;
             cur_pos +=1;
         }
+
+        // Spec requires six or less
         if (count > 6) {
             return false;
         }
+
+        // Add the token to the token list
         try p.tokens.append(
             tokens.token{
                 .sequence = tokens.sequence_type.CONTAINER,
                 .token_type = @enumFromInt(count-1),
                 .value = null
         });
+
+        // Current pos from the previous while loop should be just after the
+        // last heading
         p.pos = p.pos + cur_pos;
         return true;
-
     }
 
+    /// Adds text token for a given line
+    /// Sets the parser position to the next character after an end line
     fn textHandler(p: *parser, data: []const u8) !bool {
-        var cur_pos: usize = 0;
-        while (cur_pos < data.len) {
-            if (data[cur_pos] == '\n') {
-                try p.tokens.append(
-                    tokens.token{
-                    .sequence = tokens.sequence_type.LEAF,
-                    .token_type = tokens.token_type.TEXT,
-                    .value = data[0..cur_pos]
-                });
-                p.pos = p.pos + cur_pos + 1;
-                return true;
-            }
-            cur_pos += 1;
+
+        // Check for leading whitespace
+        const white_space_count = leadingWhiteSpace(data);
+        
+        // Spec requires less than 4 whitespaces
+        if (white_space_count > 3) {
+            return false;
         }
+        var next_pos = data.len;
+        if (data[data.len-1] == '\n') {
+            next_pos = data.len - 1;
+        }
+        // Append the token excluding the endline
         try p.tokens.append(
             tokens.token{
-            .sequence = tokens.sequence_type.INLINE,
+            .sequence = tokens.sequence_type.LEAF,
             .token_type = tokens.token_type.TEXT,
-            .value = data[0..cur_pos]
+            .value = data[white_space_count..next_pos]
         });
-        p.pos = p.pos + cur_pos + 1;
+
+        // Adjust the parser position
+        p.pos = p.pos + next_pos;
+
+        // return true
         return true;
     }
 
+    /// Add token for blank lines or return not found
     fn blankHandler(p: *parser, data: []const u8) !bool {
 
-        if (data.len == 0 or data[0] != '\n') {
+        // Check for whitespace infront
+        const white_space = leadingWhiteSpace(data);
+
+        // If the next character after whitespace isn't and endline return false
+        if (white_space == data.len or data[white_space] != '\n') {
             return false;
         }
+
+        // Add the empty token
         try p.tokens.append(
             tokens.token{
                 .sequence = tokens.sequence_type.LEAF,
@@ -102,7 +139,9 @@ pub const parser = struct {
                 .value = null, 
             }
         );
-        p.pos += 1;
+
+        // Adjust the parser position
+        p.pos += white_space + 1;
         return true;
     }
 
@@ -156,15 +195,12 @@ pub const parser = struct {
         if (data.len < 3) {
             return false;
         }
-        var pre_space_count: i32 = 0;
-        var cur_pos: usize = 0;
-        while (cur_pos < data.len and (data[cur_pos] == ' ' or data[cur_pos] == '\t')) {
-            pre_space_count += 1;
-            cur_pos +=1;
-        }
+
+        const pre_space_count = leadingWhiteSpace(data);
         if (pre_space_count > 3) {
             return false;
         }
+        var cur_pos = pre_space_count;
         if (data[cur_pos] != '_' and data[cur_pos] != '-' and data[cur_pos] != '*') {
             return false;
         }
@@ -223,8 +259,17 @@ pub const parser = struct {
     }
 };
 
-
-
+fn leadingWhiteSpace(data: []const u8) usize {
+    var pre_space_count: usize = 0;
+    for (data) | char | {
+        if (char == ' ' or char == '\t') {
+            pre_space_count += 1;
+        }else {
+            break;
+        }
+    }
+    return pre_space_count; 
+}
 
 test "parser init" {
     const allocator = std.testing.allocator;
@@ -258,6 +303,10 @@ test "headerHandler" {
     try std.testing.expectEqual(true, try p.headerHandler("#single Header"));
     try std.testing.expectEqual(true, try p.headerHandler("##DOUBLE Header"));
     try std.testing.expectEqual(true, try p.headerHandler("####Four Header"));
+    try std.testing.expectEqual(true, try p.headerHandler(" ####Four Header"));
+    try std.testing.expectEqual(true, try p.headerHandler("  ####Four Header"));
+    try std.testing.expectEqual(true, try p.headerHandler("   ####Four Header"));
+    try std.testing.expectEqual(false, try p.headerHandler("    ####Four Header"));
     try std.testing.expectEqual(false, try p.headerHandler("Some #Header"));
     
     std.debug.print("{any}\n", .{p.tokens.items});
