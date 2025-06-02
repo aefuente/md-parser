@@ -152,6 +152,50 @@ pub const parser = struct {
 
     }
 
+    fn themeBreakHandler(p: *parser, data: []const u8) !bool {
+        if (data.len < 3) {
+            return false;
+        }
+        var pre_space_count: i32 = 0;
+        var cur_pos: usize = 0;
+        while (cur_pos < data.len and (data[cur_pos] == ' ' or data[cur_pos] == '\t')) {
+            pre_space_count += 1;
+            cur_pos +=1;
+        }
+        if (pre_space_count > 3) {
+            return false;
+        }
+        if (data[cur_pos] != '_' and data[cur_pos] != '-' and data[cur_pos] != '*') {
+            return false;
+        }
+        const break_char = data[cur_pos];
+        var break_char_count: i32 = 0;
+
+        while (cur_pos < data.len and data[cur_pos] != '\n') {
+            if (data[cur_pos] != break_char and data[cur_pos] != ' ' and data[cur_pos] != '\t') {
+                return false;
+            }
+            break_char_count += 1;
+            cur_pos +=1;
+        }
+
+
+        if (break_char_count < 3) {
+            return false;
+        }
+
+        try p.tokens.append(
+            tokens.token{
+                .sequence = tokens.sequence_type.LEAF,
+                .token_type = tokens.token_type.THEMEBREAK,
+                .value = null, 
+            }
+        );
+        p.pos = p.pos + cur_pos + 1;
+        return true;
+
+    }
+
     pub fn parse(p: *parser) ![]tokens.token {
         while (indexOfLineBreak(p.pos, p.source)) | line_break | {
             if (try p.blankHandler(p.source[p.pos..line_break])) {
@@ -164,6 +208,9 @@ pub const parser = struct {
                 continue;
             } 
             if (try p.fencedCodeHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            if (try p.themeBreakHandler(p.source[p.pos..line_break])) {
                 continue;
             }
             if (try p.textHandler(p.source[p.pos..line_break])) {
@@ -242,4 +289,21 @@ test "blockQuotesHandler" {
     try std.testing.expectEqual(false, try p.blockQuotesHandler("'hello"));
     try std.testing.expectEqual(false, try p.blockQuotesHandler(">>hello"));
     try std.testing.expectEqual(false, try p.blockQuotesHandler("# >hello"));
+}
+
+test "themeBreakHandler" {
+    const allocator = std.testing.allocator;
+    var p = try parser.init(allocator, "dummysource");
+    defer p.deinit();
+    try std.testing.expectEqual(true, try p.themeBreakHandler("---\n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("***\n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("___\n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler(" ***\n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("  ___\n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("   ___\n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("   ___ "));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("   ___   \n"));
+    try std.testing.expectEqual(true, try p.themeBreakHandler("_   ___   _\n"));
+    try std.testing.expectEqual(false, try p.themeBreakHandler("*_  ___   _\n"));
+    try std.testing.expectEqual(false, try p.themeBreakHandler("___ some"));
 }
