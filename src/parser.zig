@@ -141,7 +141,7 @@ pub const parser = struct {
         );
 
         // Adjust the parser position
-        p.pos += white_space + 1;
+        p.pos += data.len;
         return true;
     }
 
@@ -181,11 +181,8 @@ pub const parser = struct {
                 .value = null, 
             }
         );
-        var cur_pos: usize = 0;
-        while (cur_pos < data.len and data[cur_pos] != '\n') {
-            cur_pos += 1;
-        }
-        p.pos += cur_pos + 1;
+
+        p.pos += data.len;
 
         return true;
 
@@ -227,9 +224,51 @@ pub const parser = struct {
                 .value = null, 
             }
         );
-        p.pos = p.pos + cur_pos + 1;
+        p.pos += data.len;
         return true;
 
+    }
+    
+    /// Handle setext
+    pub fn setextHandler(p: *parser, data:[]const u8) !bool {
+        const leading_space = leadingWhiteSpace(data);
+        if (leading_space > 3) {
+            return false;
+        }
+        var cur_pos = leading_space;
+
+        const char = data[leading_space];
+
+        if (char != '=' and char != '-') {
+            return false;
+        }
+        
+        while (cur_pos < data.len and data[cur_pos] != '\n') {
+            if (data[cur_pos] != char) {
+                return false;
+            }
+            cur_pos += 1;
+        }
+
+        if (char == '=') {
+            try p.tokens.append(
+                tokens.token{
+                    .sequence = tokens.sequence_type.LEAF,
+                    .token_type = tokens.token_type.SETEXT1,
+                    .value = null, 
+                }
+            );
+        }else {
+            try p.tokens.append(
+                tokens.token{
+                    .sequence = tokens.sequence_type.LEAF,
+                    .token_type = tokens.token_type.SETEXT2,
+                    .value = null, 
+                }
+            );
+        }
+        p.pos += data.len;
+        return true;
     }
 
     pub fn parse(p: *parser) ![]tokens.token {
@@ -247,6 +286,9 @@ pub const parser = struct {
                 continue;
             }
             if (try p.themeBreakHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            if (try p.setextHandler(p.source[p.pos..line_break])) {
                 continue;
             }
             if (try p.textHandler(p.source[p.pos..line_break])) {
@@ -355,4 +397,32 @@ test "themeBreakHandler" {
     try std.testing.expectEqual(true, try p.themeBreakHandler("_   ___   _\n"));
     try std.testing.expectEqual(false, try p.themeBreakHandler("*_  ___   _\n"));
     try std.testing.expectEqual(false, try p.themeBreakHandler("___ some"));
+}
+//===
+test "setextHandler" {
+    const allocator = std.testing.allocator;
+    var p = try parser.init(allocator, "dummysource");
+    defer p.deinit();
+    try std.testing.expectEqual(true, try p.setextHandler("---\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("--\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("-\n"));
+    try std.testing.expectEqual(true, try p.setextHandler(" ---\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("  --\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("  -\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("===\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("==\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("=\n"));
+    try std.testing.expectEqual(true, try p.setextHandler(" ===\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("  ==\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("  =\n"));
+    try std.testing.expectEqual(true, try p.setextHandler("==="));
+    try std.testing.expectEqual(true, try p.setextHandler("=="));
+    try std.testing.expectEqual(true, try p.setextHandler("="));
+    try std.testing.expectEqual(true, try p.setextHandler(" ==="));
+    try std.testing.expectEqual(true, try p.setextHandler("  =="));
+    try std.testing.expectEqual(true, try p.setextHandler("  ="));
+    try std.testing.expectEqual(false, try p.setextHandler("    =\n"));
+    try std.testing.expectEqual(false, try p.setextHandler("___"));
+    try std.testing.expectEqual(false, try p.setextHandler("= ==\n"));
+    try std.testing.expectEqual(false, try p.setextHandler("= == =\n"));
 }
