@@ -20,8 +20,11 @@ pub const token_type = enum {
     THEMEBREAK,
     BLOCKQUOTES,
     FENCEDCODE,
+    INDENTCODE,
     SETEXT1,
     SETEXT2,
+    UNORDEREDLIST,
+    ORDEREDLIST,
 
 };
 

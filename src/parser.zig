@@ -5,6 +5,7 @@ const rules = @import("rules.zig");
 const mvzr = @import("mvzr.zig");
 
 
+const OrderedListRegex = mvzr.Regex.compile("^[0-9]*\\.").?;
 /// Returns the inclusive usize of a line
 /// Example hello\n returns 6
 ///         012345  
@@ -114,7 +115,7 @@ pub const parser = struct {
         });
 
         // Adjust the parser position
-        p.pos = p.pos + next_pos;
+        p.pos += data.len;
 
         // return true
         return true;
@@ -160,6 +161,7 @@ pub const parser = struct {
         return true;
     }
 
+    /// Fenced code blocks
     fn fencedCodeHandler(p: *parser, data: []const u8) !bool {
         var flag = false;
         if (data.len < 3) {
@@ -271,6 +273,76 @@ pub const parser = struct {
         return true;
     }
 
+    /// Indented code blocks need 4 white spaces
+    /// The current implementation is wrong. It needs to be able to keep the
+    /// whitespace but current text handler won't allow for that.
+    fn indentedCodeHandler(p: *parser, data: []const u8) !bool {
+        const white_space_count = leadingWhiteSpace(data);
+
+        // Leading whitespace needs to be greater than 4
+        if (white_space_count < 4) {
+            return false;
+        }
+
+        // This would be blank line which is not allowed
+        if (data[white_space_count] == '\n') {
+            return false;
+        }
+
+
+        // TODO: Could allow for indent code to keep a value and parse as
+        // inline?
+        try p.tokens.append(
+            tokens.token{
+                .sequence = tokens.sequence_type.LEAF,
+                .token_type = tokens.token_type.INDENTCODE,
+                .value = null
+            }
+        );
+
+        p.pos += white_space_count;
+
+        return true;
+    }
+
+    fn listHandler(p: *parser, data: []const u8) !bool{
+        const cur_pos = leadingWhiteSpace(data);
+
+        const match = OrderedListRegex.match(data[cur_pos..]);
+        
+        if (match) | value |{
+            try p.tokens.append(
+                tokens.token{
+                    .sequence = tokens.sequence_type.CONTAINER,
+                    .token_type = tokens.token_type.ORDEREDLIST,
+                    .value = data[cur_pos + value.start..value.end-1],
+                }
+            );
+            p.pos += value.end;
+            return true;
+        }
+        
+        // Continue for - + *
+        if (cur_pos + 1 < data.len and (data[cur_pos] == '-' or
+            data[cur_pos] == '+' or data[cur_pos] == '*') and
+            data[cur_pos + 1] == ' ')  {
+
+            // Add the token
+            try p.tokens.append(
+                tokens.token{
+                    .sequence = tokens.sequence_type.CONTAINER,
+                    .token_type = tokens.token_type.UNORDEREDLIST,
+                    .value = null,
+                }
+            );
+            p.pos += cur_pos + 2;
+            return true;
+        }
+
+        return false;
+
+    }
+
     pub fn parse(p: *parser) ![]tokens.token {
         while (indexOfLineBreak(p.pos, p.source)) | line_break | {
             if (try p.blankHandler(p.source[p.pos..line_break])) {
@@ -289,6 +361,12 @@ pub const parser = struct {
                 continue;
             }
             if (try p.setextHandler(p.source[p.pos..line_break])) {
+                continue;
+            }
+            if (try p.indentedCodeHandler(p.source[p.pos..line_break])){
+                continue;
+            }
+            if (try p.listHandler(p.source[p.pos..line_break])) {
                 continue;
             }
             if (try p.textHandler(p.source[p.pos..line_break])) {
@@ -337,7 +415,6 @@ test "parser parse" {
         }
     }
 }
-
 test "headerHandler" {
     const allocator = std.testing.allocator;
     var p = try parser.init(allocator, "#Single Header");
@@ -398,7 +475,7 @@ test "themeBreakHandler" {
     try std.testing.expectEqual(false, try p.themeBreakHandler("*_  ___   _\n"));
     try std.testing.expectEqual(false, try p.themeBreakHandler("___ some"));
 }
-//===
+
 test "setextHandler" {
     const allocator = std.testing.allocator;
     var p = try parser.init(allocator, "dummysource");
@@ -425,4 +502,41 @@ test "setextHandler" {
     try std.testing.expectEqual(false, try p.setextHandler("___"));
     try std.testing.expectEqual(false, try p.setextHandler("= ==\n"));
     try std.testing.expectEqual(false, try p.setextHandler("= == =\n"));
+}
+
+test "indentedCodeHandler" {
+    const allocator = std.testing.allocator;
+    var p = try parser.init(allocator, "dummysource");
+    defer p.deinit();
+    
+    try std.testing.expectEqual(true, try p.indentedCodeHandler("    the"));
+    try std.testing.expectEqual(true, try p.indentedCodeHandler("    ;"));
+    try std.testing.expectEqual(true, try p.indentedCodeHandler("    the\n"));
+    try std.testing.expectEqual(true, try p.indentedCodeHandler("    ;\n"));
+    try std.testing.expectEqual(false, try p.indentedCodeHandler("  ;\n"));
+    try std.testing.expectEqual(false, try p.indentedCodeHandler(" ;\n"));
+    try std.testing.expectEqual(false, try p.indentedCodeHandler(";\n"));
+}
+
+test "listHandler" {
+    const allocator = std.testing.allocator;
+    var p = try parser.init(allocator, "dummysource");
+    defer p.deinit();
+
+    try std.testing.expectEqual(true, try p.listHandler("1. "));
+    try std.testing.expectEqual(true, try p.listHandler("2. "));
+    try std.testing.expectEqual(true, try p.listHandler("3. test more\n"));
+    try std.testing.expectEqual(true, try p.listHandler("4. the rule\n"));
+    try std.testing.expectEqual(true, try p.listHandler("5. "));
+    try std.testing.expectEqual(true, try p.listHandler("6. "));
+    try std.testing.expectEqual(true, try p.listHandler("7. "));
+    try std.testing.expectEqual(true, try p.listHandler("8. "));
+    try std.testing.expectEqual(true, try p.listHandler("9. "));
+    try std.testing.expectEqual(true, try p.listHandler("- "));
+    try std.testing.expectEqual(true, try p.listHandler("+ "));
+    try std.testing.expectEqual(true, try p.listHandler("* "));
+    try std.testing.expectEqual(false, try p.listHandler("-\n"));
+    try std.testing.expectEqual(false, try p.listHandler("the +"));
+    try std.testing.expectEqual(false, try p.listHandler("help * "));
+
 }
