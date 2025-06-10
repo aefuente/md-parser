@@ -1,6 +1,7 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const logging = @import("logging.zig");
+const render = @import("render.zig");
 
 
 pub const std_options = std.Options{
@@ -35,7 +36,7 @@ pub fn main() !void {
             std.debug.print("type: {any}\n", .{token.token_type});
         }
     }
-
+    try render.render(p.tokens.items, "example/output.html");
 }
 
 
